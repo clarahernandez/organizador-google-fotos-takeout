@@ -36,7 +36,7 @@ EPOCH_MP4 = 2082844800  # segundos entre 1904-01-01 (inicio de MP4/MOV) y 1970-0
 # Takeout a veces añade ".supplemental-metadata" (o una versión recortada) antes de ".json"
 SUFIJO_META = re.compile(r"\.supp?l?e?m?e?n?t?a?l?-?m?e?t?a?d?a?t?a?$", re.IGNORECASE)
 # Duplicados: "IMG_1234.jpg(1).json" corresponde a "IMG_1234(1).jpg"
-# Carpetas por año que crea Takeout ("Photos from 2016"): no son álbumes
+# Carpetas por año ("Photos from 2016", "Fotos del 2017"): no son álbumes, pero pueden contenerlos
 CARPETA_ANIO = re.compile(r"^(photos from|fotos de|fotos del)\s+\d{4}$", re.IGNORECASE)
 DUPLICADO = re.compile(r"^(.*?)(\.[^.]+)\((\d+)\)$")
 
@@ -118,11 +118,11 @@ def candidatos(json_path, datos):
 
 
 def album_de(foto, origen):
-    """Nombre de la subcarpeta de ORIGEN a la que pertenece la foto; None si está suelta."""
-    partes = foto.relative_to(origen).parts
-    if len(partes) < 2 or CARPETA_ANIO.match(partes[0]):
-        return None
-    return partes[0]
+    """Álbum de la foto: la primera carpeta de su ruta que no sea una carpeta de año; None si está suelta."""
+    for parte in foto.relative_to(origen).parts[:-1]:
+        if not CARPETA_ANIO.match(parte):
+            return parte
+    return None
 
 
 def hash_archivo(path):
@@ -151,6 +151,8 @@ def main():
     p.add_argument("--ejecutar", action="store_true", help="Hacer los cambios (sin esto solo simula)")
     p.add_argument("--mover", action="store_true", help="Mover en lugar de copiar")
     args = p.parse_args()
+    if not args.origen.is_dir():
+        raise SystemExit(f"No existe la carpeta de origen: {args.origen}")
 
     asignadas = {}  # foto -> fecha
     for json_path in args.origen.rglob("*.json"):
