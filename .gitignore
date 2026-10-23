@@ -1,0 +1,7 @@
+# Fotos personales: no deben subirse al repositorio
+Fotos del 2015/
+Fotos ordenadas/
+
+__pycache__/
+*.pyc
+.venv/
