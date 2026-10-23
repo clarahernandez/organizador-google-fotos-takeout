@@ -1,0 +1,3 @@
+﻿# Se versiona la carpeta, pero no su contenido (fotos personales)
+*
+!.gitignore

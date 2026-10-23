@@ -1,6 +1,8 @@
 """
 Organiza las fotos de un Google Takeout en carpetas por mes (AAAA/MM),
 usando la fecha real de captura que viene en los archivos .json.
+Cada subcarpeta de ORIGEN es un álbum: se guarda entera en el mes de su foto más antigua
+(AAAA/MM/Álbum) y las fotos sueltas idénticas a las del álbum se descartan.
 
 Uso:
     python organizar_fotos.py "E:/Takeout/Google Fotos" "E:/Fotos ordenadas"             # simulación (no toca nada)
@@ -9,6 +11,7 @@ Uso:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -33,6 +36,8 @@ EPOCH_MP4 = 2082844800  # segundos entre 1904-01-01 (inicio de MP4/MOV) y 1970-0
 # Takeout a veces añade ".supplemental-metadata" (o una versión recortada) antes de ".json"
 SUFIJO_META = re.compile(r"\.supp?l?e?m?e?n?t?a?l?-?m?e?t?a?d?a?t?a?$", re.IGNORECASE)
 # Duplicados: "IMG_1234.jpg(1).json" corresponde a "IMG_1234(1).jpg"
+# Carpetas por año que crea Takeout ("Photos from 2016"): no son álbumes
+CARPETA_ANIO = re.compile(r"^(photos from|fotos de|fotos del)\s+\d{4}$", re.IGNORECASE)
 DUPLICADO = re.compile(r"^(.*?)(\.[^.]+)\((\d+)\)$")
 
 
@@ -112,6 +117,22 @@ def candidatos(json_path, datos):
     return nombres
 
 
+def album_de(foto, origen):
+    """Nombre de la subcarpeta de ORIGEN a la que pertenece la foto; None si está suelta."""
+    partes = foto.relative_to(origen).parts
+    if len(partes) < 2 or CARPETA_ANIO.match(partes[0]):
+        return None
+    return partes[0]
+
+
+def hash_archivo(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for bloque in iter(lambda: f.read(1 << 20), b""):
+            h.update(bloque)
+    return h.digest()
+
+
 def destino_libre(path):
     if not path.exists():
         return path
@@ -169,30 +190,78 @@ def main():
         else:
             sin_fecha.append(foto)
 
+    # Álbumes: cada subcarpeta de ORIGEN va entera al mes de su foto más antigua
+    albumes = {}
+    for foto in list(asignadas) + sin_fecha:
+        nombre = album_de(foto, args.origen)
+        if nombre:
+            albumes.setdefault(nombre, []).append(foto)
+
+    # Una foto suelta idéntica a una de un álbum se descarta: ya está en el álbum
+    en_album = {f for fotos in albumes.values() for f in fotos}
+    huellas = {}
+    for f in en_album:
+        huellas.setdefault(f.stat().st_size, set()).add(hash_archivo(f))
+    duplicadas = []
+    for foto in list(asignadas) + sin_fecha:
+        tam = foto.stat().st_size
+        if foto not in en_album and tam in huellas and hash_archivo(foto) in huellas[tam]:
+            duplicadas.append(foto)
+    for foto in duplicadas:
+        asignadas.pop(foto, None)
+        if foto in sin_fecha:
+            sin_fecha.remove(foto)
+
+    plan = []  # (foto, carpeta de destino, fecha o None)
     por_mes = Counter()
-    accion = shutil.move if args.mover else shutil.copy2
     for foto, fecha in sorted(asignadas.items(), key=lambda x: x[1]):
-        carpeta = args.destino / f"{fecha:%Y}" / f"{fecha:%m}"
-        por_mes[f"{fecha:%Y-%m}"] += 1
-        if args.ejecutar:
+        if foto not in en_album:
+            por_mes[f"{fecha:%Y-%m}"] += 1
+            plan.append((foto, args.destino / f"{fecha:%Y}" / f"{fecha:%m}", fecha))
+    for foto in sin_fecha:
+        if foto not in en_album:
+            plan.append((foto, args.destino / "sin_fecha", None))
+
+    resumen_albumes = []
+    for nombre, fotos in sorted(albumes.items()):
+        fechas = [asignadas[f] for f in fotos if f in asignadas]
+        if fechas:
+            primera = min(fechas)
+            base = args.destino / f"{primera:%Y}" / f"{primera:%m}" / nombre
+            resumen_albumes.append(f"{primera:%Y-%m}  {nombre} ({len(fotos)} archivos)")
+        else:
+            base = args.destino / "sin_fecha" / nombre
+            resumen_albumes.append(f"sin_fecha  {nombre} ({len(fotos)} archivos)")
+        for foto in fotos:
+            plan.append((foto, base, asignadas.get(foto)))
+
+    accion = shutil.move if args.mover else shutil.copy2
+    if args.ejecutar:
+        for foto, carpeta, fecha in plan:
             carpeta.mkdir(parents=True, exist_ok=True)
             nuevo = destino_libre(carpeta / foto.name)
             accion(str(foto), str(nuevo))
-            ts = fecha.timestamp()
-            os.utime(nuevo, (ts, ts))  # que la fecha del archivo sea la de captura
+            if fecha:
+                ts = fecha.timestamp()
+                os.utime(nuevo, (ts, ts))  # que la fecha del archivo sea la de captura
+        if args.mover:
+            for foto in duplicadas:
+                foto.unlink()  # su copia idéntica ya está en el álbum
 
-    for foto in sin_fecha:
-        if args.ejecutar:
-            carpeta = args.destino / "sin_fecha"
-            carpeta.mkdir(parents=True, exist_ok=True)
-            accion(str(foto), str(destino_libre(carpeta / foto.name)))
-
-    print("\nFotos/vídeos por mes:")
+    print("\nFotos/vídeos por mes (fuera de álbumes):")
     for mes, n in sorted(por_mes.items()):
         print(f"  {mes}: {n}")
+    if resumen_albumes:
+        print("\nÁlbumes (van al mes de su foto más antigua):")
+        for linea in resumen_albumes:
+            print(f"  {linea}")
     print(f"\nTotal con fecha: {len(asignadas)}")
     print(f"  fecha del .json: {n_json}")
     print(f"  fecha de los metadatos, EXIF o vídeo (sin .json): {n_meta}")
+    eliminadas = args.mover and args.ejecutar
+    print(f"Repetidas de un álbum ({'eliminadas' if eliminadas else 'no se copian'}): {len(duplicadas)}")
+    for f in duplicadas[:20]:
+        print(f"   - {f.relative_to(args.origen)}")
     print(f"Sin .json ni metadatos con fecha (irán a 'sin_fecha'): {len(sin_fecha)}")
     for f in sin_fecha[:20]:
         print(f"   - {f.relative_to(args.origen)}")

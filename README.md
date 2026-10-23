@@ -1,4 +1,4 @@
-# Organizador de fotos
+# Organizador de Google Fotos con Takeout.
 
 Script en Python que ordena fotos y vídeos en carpetas por el mes en que se tomaron, con la estructura `AAAA/MM`. Está pensado para exportaciones de Google Fotos (Google Takeout), pero también funciona con carpetas de fotos normales.
 
@@ -65,9 +65,11 @@ Se recomienda ejecutar siempre primero la simulación y revisar el resumen.
 1. **Busca los archivos multimedia** en `ORIGEN` y sus subcarpetas (fotos: jpg, png, heic, raw...; vídeos: mp4, mov, avi...).
 2. **Asocia cada foto con su `.json`** de Takeout (por ejemplo `foto.jpg.supplemental-metadata.json`) y lee la fecha de captura (`photoTakenTime`, o `creationTime` si falta). También reconoce los nombres con duplicados, como `foto(1).jpg`, y las versiones editadas (`-editada` / `-edited`), que usan la fecha del original.
 3. **Si una foto no tiene `.json`**, busca la fecha de captura en sus metadatos: el EXIF en las imágenes y la fecha de creación guardada dentro del archivo en los vídeos `.mp4`, `.mov`, `.m4v` y `.3gp`. Si tampoco la tiene, la manda a la carpeta `sin_fecha` para que la clasifiques a mano; la fecha de modificación del archivo no se usa porque no es fiable.
-4. **Crea la carpeta `AAAA/MM`** y copia o mueve ahí el archivo. Si ya existe uno con el mismo nombre, añade un sufijo (`_1`, `_2`...) para no sobrescribirlo.
-5. **Ajusta la fecha del archivo** a la de captura.
-6. **Muestra un resumen**: número de archivos por mes, cuántos se ordenaron por `.json` y por metadatos, y la lista de los que irán a `sin_fecha`.
+4. **Trata cada subcarpeta de `ORIGEN` como un álbum**: la guarda entera en `AAAA/MM/Nombre del álbum`, donde `AAAA/MM` es el mes de su foto más antigua. Las carpetas por año de Takeout (`Photos from 2016`) no cuentan como álbumes.
+5. **Descarta las repetidas**: si una foto suelta es idéntica (mismo contenido) a una de un álbum, no se copia, porque ya está en el álbum. Con `--mover` se elimina del origen.
+6. **Crea la carpeta `AAAA/MM`** y copia o mueve ahí el archivo. Si ya existe uno con el mismo nombre, añade un sufijo (`_1`, `_2`...) para no sobrescribirlo.
+7. **Ajusta la fecha del archivo** a la de captura.
+8. **Muestra un resumen**: número de archivos por mes, los álbumes y su mes, las repetidas descartadas, cuántos se ordenaron por `.json` y por metadatos, y la lista de los que irán a `sin_fecha`.
 
 ## Limitaciones
 
@@ -75,4 +77,5 @@ Se recomienda ejecutar siempre primero la simulación y revisar el resumen.
 - Los vídeos `.avi`, `.mkv`, `.webm` y `.mts` no se pueden leer: sin `.json` van a `sin_fecha`.
 - Algunos vídeos guardan la fecha en UTC, así que uno grabado a última hora del día puede caer en el mes siguiente.
 - La fecha de los `.json` se interpreta en la zona horaria del equipo.
-- El script no detecta fotos duplicadas.
+- Un álbum entero va a un solo mes, aunque sus fotos sean de varios.
+- Solo se detectan duplicados entre una foto suelta y las de un álbum; dos fotos sueltas repetidas no se tocan.
