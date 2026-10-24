@@ -165,6 +165,7 @@ def main():
         raise SystemExit(f"No existe la carpeta de origen: {args.origen}")
 
     asignadas = {}  # foto -> fecha
+    jsons = {}  # foto -> su .json
     for json_path in args.origen.rglob("*.json"):
         try:
             datos = json.loads(json_path.read_text(encoding="utf-8"))
@@ -179,12 +180,14 @@ def main():
             foto = json_path.parent / nombre
             if foto.is_file() and foto.suffix.lower() in MEDIA:
                 asignadas[foto] = fecha
+                jsons[foto] = json_path
                 # La versión editada comparte el .json del original
                 editada = foto.with_name(f"{foto.stem}-editada{foto.suffix}")
                 edited = foto.with_name(f"{foto.stem}-edited{foto.suffix}")
                 for e in (editada, edited):
                     if e.is_file():
                         asignadas[e] = fecha
+                        jsons[e] = json_path
                 break
 
     todas = [f for f in args.origen.rglob("*") if f.is_file() and f.suffix.lower() in MEDIA]
@@ -247,6 +250,17 @@ def main():
         for foto in fotos:
             plan.append((foto, base, asignadas.get(foto)))
 
+    # Con --mover el origen se vacía: sobran los .json de las fotos movidas y las carpetas vacías
+    borrar_jsons, sobrantes, vacias = set(), [], []
+    if args.mover:
+        desaparecen = {f for f, _, _ in plan} | set(duplicadas)
+        borrar_jsons = {jsons[f] for f in desaparecen if f in jsons}
+        desaparecen |= borrar_jsons
+        sobrantes = sorted(j for j in args.origen.rglob("*.json") if j not in borrar_jsons)
+        carpetas = sorted((d for d in args.origen.rglob("*") if d.is_dir()),
+                          key=lambda d: len(d.parts), reverse=True)
+        vacias = [d for d in carpetas if all(f in desaparecen for f in d.rglob("*") if f.is_file())]
+
     accion = shutil.move if args.mover else shutil.copy2
     if args.ejecutar:
         for foto, carpeta, fecha in plan:
@@ -259,6 +273,13 @@ def main():
         if args.mover:
             for foto in duplicadas:
                 foto.unlink()  # su copia idéntica ya está en el álbum
+            for j in borrar_jsons:
+                j.unlink(missing_ok=True)
+            for d in vacias:  # de la más profunda a la menos
+                try:
+                    d.rmdir()
+                except OSError:
+                    pass  # no estaba vacía
 
     print("\nFotos/vídeos por mes (fuera de álbumes):")
     for mes, n in sorted(por_mes.items()):
@@ -279,6 +300,14 @@ def main():
         print(f"   - {f.relative_to(args.origen)}")
     if len(sin_fecha) > 20:
         print(f"   ... y {len(sin_fecha) - 20} más")
+    if args.mover:
+        print(f"\n.json de las fotos movidas ({'eliminados' if eliminadas else 'se eliminarían'}): {len(borrar_jsons)}")
+        print(f"Carpetas vacías del origen ({'eliminadas' if eliminadas else 'se eliminarían'}): {len(vacias)}")
+        print(f".json que se quedan (no pertenecen a ninguna foto): {len(sobrantes)}")
+        for j in sobrantes[:20]:
+            print(f"   - {j.relative_to(args.origen)}")
+        if len(sobrantes) > 20:
+            print(f"   ... y {len(sobrantes) - 20} más")
     if not args.ejecutar:
         print("\n(Simulación: no se ha tocado nada. Añade --ejecutar para hacerlo de verdad.)")
 

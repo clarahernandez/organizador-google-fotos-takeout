@@ -69,8 +69,9 @@ Se recomienda ejecutar siempre primero la simulación y revisar el resumen.
 4. **Trata cada subcarpeta de `ORIGEN` como un álbum**: la guarda entera en `AAAA/MM/Nombre del álbum`, donde `AAAA/MM` es el mes de su foto más antigua. Las carpetas por año (`Photos from 2016`, `Fotos del 2017`) no cuentan como álbumes, pero sí los álbumes que haya dentro de ellas (`Fotos del 2017/11. Colación`).
 5. **Descarta las repetidas**: si una foto suelta es idéntica (mismo contenido) a una de un álbum, no se copia, porque ya está en el álbum. Con `--mover` se elimina del origen.
 6. **Crea la carpeta `AAAA/MM`** y copia o mueve ahí el archivo. Si ya existe uno con el mismo nombre, añade un sufijo (`_1`, `_2`...) para no sobrescribirlo.
-7. **Ajusta la fecha del archivo** a la de captura.
-8. **Muestra un resumen**: número de archivos por mes, los álbumes y su mes, las repetidas descartadas, cuántos se ordenaron por `.json` y por metadatos, y la lista de los que irán a `sin_fecha`.
+7. **Limpia el origen (solo con `--mover`)**: elimina los `.json` de las fotos movidas y las carpetas que queden vacías. Los `.json` que no pertenecen a ninguna foto (como el `metadatos.json` de cada álbum) se conservan y se listan en el resumen. Sin `--mover` el origen no se toca.
+8. **Ajusta la fecha del archivo** a la de captura.
+9. **Muestra un resumen**: número de archivos por mes, los álbumes y su mes, las repetidas descartadas, cuántos se ordenaron por `.json` y por metadatos, la lista de los que irán a `sin_fecha` y, con `--mover`, los `.json` y carpetas que se eliminan.
 
 ## Limitaciones
 
