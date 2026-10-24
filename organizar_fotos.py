@@ -37,7 +37,10 @@ VIDEO_ISO = {".mp4", ".mov", ".m4v", ".3gp"}
 EPOCH_MP4 = 2082844800  # segundos entre 1904-01-01 (inicio de MP4/MOV) y 1970-01-01
 
 # Takeout a veces añade ".supplemental-metadata" (o una versión recortada) antes de ".json"
-SUFIJO_META = re.compile(r"\.supp?l?e?m?e?n?t?a?l?-?m?e?t?a?d?a?t?a?$", re.IGNORECASE)
+_META = r"\.supp?l?e?m?e?n?t?a?l?-?m?e?t?a?d?a?t?a?"
+SUFIJO_META = re.compile(_META + r"$", re.IGNORECASE)
+# En los duplicados el número va después: "IMG_1234.jpg.supplemental-metadata(1).json"
+SUFIJO_META_NUM = re.compile(_META + r"(\(\d+\))$", re.IGNORECASE)
 # Duplicados: "IMG_1234.jpg(1).json" corresponde a "IMG_1234(1).jpg"
 # Carpetas por año ("Photos from 2016", "Fotos del 2017"): no son álbumes, pero pueden contenerlos
 CARPETA_ANIO = re.compile(r"^(photos from|fotos de|fotos del)\s+\d{4}$", re.IGNORECASE)
@@ -110,7 +113,11 @@ def fecha_metadatos(archivo):
 def candidatos(json_path, datos):
     """Posibles nombres del archivo de foto/vídeo al que pertenece este .json."""
     base = json_path.name[:-len(".json")]
-    base = SUFIJO_META.sub("", base) if "." in base else base
+    m = SUFIJO_META_NUM.search(base)
+    if m:
+        base = base[:m.start()] + m.group(1)  # "x.jpg(1)", que DUPLICADO convierte en "x(1).jpg"
+    elif "." in base:
+        base = SUFIJO_META.sub("", base)
     nombres = [base]
     m = DUPLICADO.match(base)
     if m:
