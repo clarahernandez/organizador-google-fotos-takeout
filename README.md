@@ -17,7 +17,8 @@ Fotos ordenadas/
 ## Requisitos
 
 - Python 3.8 o superior.
-- [Pillow](https://pypi.org/project/Pillow/), obligatorio: lee la fecha EXIF de las fotos sin `.json`. Sin él, el script no arranca.
+- [Pillow](https://pypi.org/project/Pillow/), obligatorio: lee la fecha EXIF de las fotos sin `.json`.
+- [pillow-heif](https://pypi.org/project/pillow-heif/), obligatorio: permite leer el EXIF de las fotos `.heic` / `.heif` del iPhone. Sin Pillow ni pillow-heif, el script no arranca.
 
 Instalación en un entorno virtual (PowerShell, desde la carpeta del proyecto):
 

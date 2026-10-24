@@ -23,8 +23,11 @@ from pathlib import Path
 
 try:
     from PIL import Image  # obligatorio para leer el EXIF
+    from pillow_heif import register_heif_opener  # permite a Pillow abrir .heic / .heif (iPhone)
 except ImportError:
-    raise SystemExit("Falta Pillow. Instálalo con: pip install -r requirements.txt")
+    raise SystemExit("Faltan dependencias. Instálalas con: pip install -r requirements.txt")
+
+register_heif_opener()
 
 MEDIA = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".gif", ".webp", ".bmp", ".tif", ".tiff",
          ".dng", ".raw", ".cr2", ".nef", ".arw",
