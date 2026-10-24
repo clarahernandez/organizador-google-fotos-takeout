@@ -42,9 +42,10 @@ SUFIJO_META = re.compile(_META + r"$", re.IGNORECASE)
 # En los duplicados el número va después: "IMG_1234.jpg.supplemental-metadata(1).json"
 SUFIJO_META_NUM = re.compile(_META + r"(\(\d+\))$", re.IGNORECASE)
 # Duplicados: "IMG_1234.jpg(1).json" corresponde a "IMG_1234(1).jpg"
+DUPLICADO = re.compile(r"^(.*?)(\.[^.]+)\((\d+)\)$")
 # Carpetas por año ("Photos from 2016", "Fotos del 2017"): no son álbumes, pero pueden contenerlos
 CARPETA_ANIO = re.compile(r"^(photos from|fotos de|fotos del)\s+\d{4}$", re.IGNORECASE)
-DUPLICADO = re.compile(r"^(.*?)(\.[^.]+)\((\d+)\)$")
+MAX_LISTADO = 20  # archivos que se listan en cada sección del resumen
 
 
 def fecha_de_json(datos):
@@ -154,7 +155,7 @@ def destino_libre(path):
         n += 1
 
 
-def main():
+def leer_argumentos():
     p = argparse.ArgumentParser(description="Organiza fotos de Google Takeout por mes.")
     p.add_argument("origen", type=Path, help="Carpeta del Takeout (con fotos y .json)")
     p.add_argument("destino", type=Path, help="Carpeta donde crear AAAA/MM")
@@ -163,10 +164,13 @@ def main():
     args = p.parse_args()
     if not args.origen.is_dir():
         raise SystemExit(f"No existe la carpeta de origen: {args.origen}")
+    return args
 
-    asignadas = {}  # foto -> fecha
-    jsons = {}  # foto -> su .json
-    for json_path in args.origen.rglob("*.json"):
+
+def fechas_de_los_json(origen):
+    """Asocia cada foto con la fecha y el .json que le corresponden: (fotos -> fecha, fotos -> .json)."""
+    fechas, jsons = {}, {}
+    for json_path in origen.rglob("*.json"):
         try:
             datos = json.loads(json_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -179,108 +183,141 @@ def main():
         for nombre in candidatos(json_path, datos):
             foto = json_path.parent / nombre
             if foto.is_file() and foto.suffix.lower() in MEDIA:
-                asignadas[foto] = fecha
-                jsons[foto] = json_path
                 # La versión editada comparte el .json del original
-                editada = foto.with_name(f"{foto.stem}-editada{foto.suffix}")
-                edited = foto.with_name(f"{foto.stem}-edited{foto.suffix}")
-                for e in (editada, edited):
-                    if e.is_file():
-                        asignadas[e] = fecha
-                        jsons[e] = json_path
+                editadas = (foto.with_name(f"{foto.stem}{sufijo}{foto.suffix}") for sufijo in ("-editada", "-edited"))
+                for archivo in (foto, *(e for e in editadas if e.is_file())):
+                    fechas[archivo] = fecha
+                    jsons[archivo] = json_path
                 break
+    return fechas, jsons
 
-    todas = [f for f in args.origen.rglob("*") if f.is_file() and f.suffix.lower() in MEDIA]
-    sin_json = [f for f in todas if f not in asignadas]
 
-    # Sin .json: fecha de los metadatos (EXIF / vídeo); si tampoco hay, irán a "sin_fecha"
-    n_json = len(asignadas)
-    n_meta = 0
+def fechas_de_metadatos(origen, fechas):
+    """Añade a `fechas` la de los archivos sin .json (EXIF / vídeo); devuelve los que siguen sin fecha."""
     sin_fecha = []
-    for foto in sin_json:
+    for foto in origen.rglob("*"):
+        if not foto.is_file() or foto.suffix.lower() not in MEDIA or foto in fechas:
+            continue
         fecha = fecha_metadatos(foto)
         if fecha:
-            asignadas[foto] = fecha
-            n_meta += 1
+            fechas[foto] = fecha
         else:
             sin_fecha.append(foto)
+    return sin_fecha
 
-    # Álbumes: cada subcarpeta de ORIGEN va entera al mes de su foto más antigua
+
+def agrupar_albumes(fotos, origen):
+    """Fotos de cada álbum: {nombre del álbum: [fotos]}."""
     albumes = {}
-    for foto in list(asignadas) + sin_fecha:
-        nombre = album_de(foto, args.origen)
+    for foto in fotos:
+        nombre = album_de(foto, origen)
         if nombre:
             albumes.setdefault(nombre, []).append(foto)
+    return albumes
 
-    # Una foto suelta idéntica a una de un álbum se descarta: ya está en el álbum
-    en_album = {f for fotos in albumes.values() for f in fotos}
-    huellas = {}
+
+def buscar_repetidas(fotos, albumes):
+    """Fotos sueltas idénticas (mismo contenido) a una de un álbum: ya están en el álbum."""
+    en_album = {f for fotos_album in albumes.values() for f in fotos_album}
+    huellas = {}  # tamaño -> contenidos; solo se calcula el hash si coincide el tamaño
     for f in en_album:
         huellas.setdefault(f.stat().st_size, set()).add(hash_archivo(f))
-    duplicadas = []
-    for foto in list(asignadas) + sin_fecha:
+    repetidas = []
+    for foto in fotos:
         tam = foto.stat().st_size
         if foto not in en_album and tam in huellas and hash_archivo(foto) in huellas[tam]:
-            duplicadas.append(foto)
-    for foto in duplicadas:
-        asignadas.pop(foto, None)
-        if foto in sin_fecha:
-            sin_fecha.remove(foto)
+            repetidas.append(foto)
+    return repetidas
 
-    plan = []  # (foto, carpeta de destino, fecha o None)
+
+def planificar(destino, fechas, sin_fecha, albumes):
+    """Qué va a dónde: (plan [(foto, carpeta, fecha o None)], fotos por mes, resumen de álbumes)."""
+    en_album = {f for fotos in albumes.values() for f in fotos}
+    plan = []
     por_mes = Counter()
-    for foto, fecha in sorted(asignadas.items(), key=lambda x: x[1]):
+    for foto, fecha in sorted(fechas.items(), key=lambda x: x[1]):
         if foto not in en_album:
             por_mes[f"{fecha:%Y-%m}"] += 1
-            plan.append((foto, args.destino / f"{fecha:%Y}" / f"{fecha:%m}", fecha))
+            plan.append((foto, destino / f"{fecha:%Y}" / f"{fecha:%m}", fecha))
     for foto in sin_fecha:
         if foto not in en_album:
-            plan.append((foto, args.destino / "sin_fecha", None))
+            plan.append((foto, destino / "sin_fecha", None))
 
     resumen_albumes = []
     for nombre, fotos in sorted(albumes.items()):
-        fechas = [asignadas[f] for f in fotos if f in asignadas]
-        if fechas:
-            primera = min(fechas)
-            base = args.destino / f"{primera:%Y}" / f"{primera:%m}" / nombre
+        fechas_album = [fechas[f] for f in fotos if f in fechas]
+        if fechas_album:
+            primera = min(fechas_album)  # el álbum entero va al mes de su foto más antigua
+            carpeta = destino / f"{primera:%Y}" / f"{primera:%m}" / nombre
             resumen_albumes.append(f"{primera:%Y-%m}  {nombre} ({len(fotos)} archivos)")
         else:
-            base = args.destino / "sin_fecha" / nombre
+            carpeta = destino / "sin_fecha" / nombre
             resumen_albumes.append(f"sin_fecha  {nombre} ({len(fotos)} archivos)")
-        for foto in fotos:
-            plan.append((foto, base, asignadas.get(foto)))
+        plan.extend((foto, carpeta, fechas.get(foto)) for foto in fotos)
+    return plan, por_mes, resumen_albumes
 
-    # Con --mover el origen se vacía: sobran los .json de las fotos movidas y las carpetas vacías
-    borrar_jsons, sobrantes, vacias = set(), [], []
-    if args.mover:
-        desaparecen = {f for f, _, _ in plan} | set(duplicadas)
-        borrar_jsons = {jsons[f] for f in desaparecen if f in jsons}
-        desaparecen |= borrar_jsons
-        sobrantes = sorted(j for j in args.origen.rglob("*.json") if j not in borrar_jsons)
-        carpetas = sorted((d for d in args.origen.rglob("*") if d.is_dir()),
-                          key=lambda d: len(d.parts), reverse=True)
-        vacias = [d for d in carpetas if all(f in desaparecen for f in d.rglob("*") if f.is_file())]
 
-    accion = shutil.move if args.mover else shutil.copy2
+def calcular_limpieza(origen, plan, repetidas, jsons):
+    """Con --mover el origen se vacía: (.json de las fotos movidas, .json que sobran, carpetas vacías)."""
+    desaparecen = {f for f, _, _ in plan} | set(repetidas)
+    borrar_jsons = {jsons[f] for f in desaparecen if f in jsons}
+    desaparecen |= borrar_jsons
+    sobrantes = sorted(j for j in origen.rglob("*.json") if j not in borrar_jsons)
+    carpetas = sorted((d for d in origen.rglob("*") if d.is_dir()), key=lambda d: len(d.parts), reverse=True)
+    vacias = [d for d in carpetas if all(f in desaparecen for f in d.rglob("*") if f.is_file())]
+    return borrar_jsons, sobrantes, vacias
+
+
+def aplicar(mover, plan, repetidas, borrar_jsons, vacias):
+    accion = shutil.move if mover else shutil.copy2
+    for foto, carpeta, fecha in plan:
+        carpeta.mkdir(parents=True, exist_ok=True)
+        nuevo = destino_libre(carpeta / foto.name)
+        accion(str(foto), str(nuevo))
+        if fecha:
+            ts = fecha.timestamp()
+            os.utime(nuevo, (ts, ts))  # que la fecha del archivo sea la de captura
+    if mover:
+        for foto in repetidas:
+            foto.unlink()  # su copia idéntica ya está en el álbum
+        for j in borrar_jsons:
+            j.unlink(missing_ok=True)
+        for d in vacias:  # de la más profunda a la menos
+            try:
+                d.rmdir()
+            except OSError:
+                pass  # no estaba vacía
+
+
+def listar(archivos, origen):
+    for f in archivos[:MAX_LISTADO]:
+        print(f"   - {f.relative_to(origen)}")
+    if len(archivos) > MAX_LISTADO:
+        print(f"   ... y {len(archivos) - MAX_LISTADO} más")
+
+
+def main():
+    args = leer_argumentos()
+    origen = args.origen
+
+    fechas, jsons = fechas_de_los_json(origen)
+    n_json = len(fechas)
+    sin_fecha = fechas_de_metadatos(origen, fechas)  # irán a "sin_fecha" si tampoco tienen metadatos
+    n_meta = len(fechas) - n_json
+
+    albumes = agrupar_albumes([*fechas, *sin_fecha], origen)
+    repetidas = buscar_repetidas([*fechas, *sin_fecha], albumes)
+    for foto in repetidas:
+        fechas.pop(foto, None)
+    descartadas = set(repetidas)
+    sin_fecha = [f for f in sin_fecha if f not in descartadas]
+
+    plan, por_mes, resumen_albumes = planificar(args.destino, fechas, sin_fecha, albumes)
+    borrar_jsons, sobrantes, vacias = calcular_limpieza(origen, plan, repetidas, jsons) if args.mover else (set(), [], [])
     if args.ejecutar:
-        for foto, carpeta, fecha in plan:
-            carpeta.mkdir(parents=True, exist_ok=True)
-            nuevo = destino_libre(carpeta / foto.name)
-            accion(str(foto), str(nuevo))
-            if fecha:
-                ts = fecha.timestamp()
-                os.utime(nuevo, (ts, ts))  # que la fecha del archivo sea la de captura
-        if args.mover:
-            for foto in duplicadas:
-                foto.unlink()  # su copia idéntica ya está en el álbum
-            for j in borrar_jsons:
-                j.unlink(missing_ok=True)
-            for d in vacias:  # de la más profunda a la menos
-                try:
-                    d.rmdir()
-                except OSError:
-                    pass  # no estaba vacía
+        aplicar(args.mover, plan, repetidas, borrar_jsons, vacias)
 
+    eliminadas = args.mover and args.ejecutar
     print("\nFotos/vídeos por mes (fuera de álbumes):")
     for mes, n in sorted(por_mes.items()):
         print(f"  {mes}: {n}")
@@ -288,26 +325,18 @@ def main():
         print("\nÁlbumes (van al mes de su foto más antigua):")
         for linea in resumen_albumes:
             print(f"  {linea}")
-    print(f"\nTotal con fecha: {len(asignadas)}")
+    print(f"\nTotal con fecha: {len(fechas)}")
     print(f"  fecha del .json: {n_json}")
     print(f"  fecha de los metadatos, EXIF o vídeo (sin .json): {n_meta}")
-    eliminadas = args.mover and args.ejecutar
-    print(f"Repetidas de un álbum ({'eliminadas' if eliminadas else 'no se copian'}): {len(duplicadas)}")
-    for f in duplicadas[:20]:
-        print(f"   - {f.relative_to(args.origen)}")
+    print(f"Repetidas de un álbum ({'eliminadas' if eliminadas else 'no se copian'}): {len(repetidas)}")
+    listar(repetidas, origen)
     print(f"Sin .json ni metadatos con fecha (irán a 'sin_fecha'): {len(sin_fecha)}")
-    for f in sin_fecha[:20]:
-        print(f"   - {f.relative_to(args.origen)}")
-    if len(sin_fecha) > 20:
-        print(f"   ... y {len(sin_fecha) - 20} más")
+    listar(sin_fecha, origen)
     if args.mover:
         print(f"\n.json de las fotos movidas ({'eliminados' if eliminadas else 'se eliminarían'}): {len(borrar_jsons)}")
         print(f"Carpetas vacías del origen ({'eliminadas' if eliminadas else 'se eliminarían'}): {len(vacias)}")
         print(f".json que se quedan (no pertenecen a ninguna foto): {len(sobrantes)}")
-        for j in sobrantes[:20]:
-            print(f"   - {j.relative_to(args.origen)}")
-        if len(sobrantes) > 20:
-            print(f"   ... y {len(sobrantes) - 20} más")
+        listar(sobrantes, origen)
     if not args.ejecutar:
         print("\n(Simulación: no se ha tocado nada. Añade --ejecutar para hacerlo de verdad.)")
 

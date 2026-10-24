@@ -79,5 +79,5 @@ Se recomienda ejecutar siempre primero la simulación y revisar el resumen.
 - Los vídeos `.avi`, `.mkv`, `.webm` y `.mts` no se pueden leer: sin `.json` van a `sin_fecha`.
 - Algunos vídeos guardan la fecha en UTC, así que uno grabado a última hora del día puede caer en el mes siguiente.
 - La fecha de los `.json` se interpreta en la zona horaria del equipo.
-- Un álbum entero va a un solo mes, aunque sus fotos sean de varios.
+- Un álbum entero va a un solo mes, aunque sus fotos sean de varios (va a usar el mes de la foto más antigua)
 - Solo se detectan duplicados entre una foto suelta y las de un álbum; dos fotos sueltas repetidas no se tocan.
